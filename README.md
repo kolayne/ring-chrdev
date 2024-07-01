@@ -15,3 +15,6 @@ $ rmmod ring-chrdev.ko  # Unload loaded module
 ...
 $
 ```
+
+To generate `compile_commands.json`, use [Bear](https://github.com/rizsotto/Bear):
+instead of `make ...` run `bear -- make ...`

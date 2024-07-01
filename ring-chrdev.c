@@ -2,18 +2,20 @@
 #include <linux/printk.h>
 #include <linux/fs.h>
 
-static int ring_open(struct inode *inode, struct file *filp) {
-#ifdef DEBUG
-    pr_debug("ring_open: major=%u, minor=%u\n", imajor(inode), iminor(inode));
+// Disable `pr_debug` when not `DEBUG`
+#ifndef DEBUG
+#undef pr_debug
+#define pr_debug(...)
 #endif
 
-   return 0;
+static int ring_open(struct inode *inode, struct file *filp) {
+    pr_debug("ring_open: major=%u, minor=%u\n", imajor(inode), iminor(inode));
+
+    return 0;
 }
 
 static int ring_release(struct inode *inode, struct file *filp) {
-#ifdef DEBUG
     pr_debug("ring_release: major=%u, minor=%u\n", imajor(inode), iminor(inode));
-#endif
 
     return 0;
 }
@@ -21,9 +23,7 @@ static int ring_release(struct inode *inode, struct file *filp) {
 static ssize_t ring_read(struct file *filp, char __user *buffer,
                          size_t length, loff_t *offset)
 {
-#ifdef DEBUG
     pr_debug("ring_read: offset=%lld, len=%ld\n", *offset, length);
-#endif
 
     // Nothing to be read
     return 0;
@@ -32,9 +32,7 @@ static ssize_t ring_read(struct file *filp, char __user *buffer,
 static ssize_t ring_write(struct file *filp, const char __user *buff,
                           size_t length, loff_t *offset)
 {
-#ifdef DEBUG
     pr_debug("ring_write: offset=%lld, len=%ld\n", *offset, length);
-#endif
 
     // Operation not supported
     return -ENOSYS;
@@ -68,9 +66,7 @@ static int __init ring_init(void) {
 }
 
 static void __exit ring_cleanup(void) {
-#ifdef DEBUG
     pr_debug("ring-chrdev: cleaning up\n");
-#endif
 
     unregister_chrdev(major, RING_CHRDEV_NAME);
 }

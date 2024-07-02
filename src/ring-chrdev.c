@@ -3,13 +3,26 @@
 #include <linux/fs.h>
 
 
-#ifndef DEBUG
+#ifdef DEBUG
+
+#define MAX_WHILE_ITERATIONS 10
+
+#else  // DEBUG
+
+#define MAX_WHILE_ITERATIONS (10 * 1000)
 
 // Disable `pr_debug` when not DEBUG
 #undef pr_debug
 #define pr_debug(...) do {} while (0)
 
 #endif  // DEBUG
+
+
+// Force upper boundary on the number of iterations of a `while` loop
+// (just like in NASA :sunglasses:).
+// Watch out: the number of iterations for DEBUG is really small.
+#define While(cond) \
+    for (int _i##__LINE__ = 0; (cond) && _i##__LINE__ < MAX_WHILE_ITERATIONS; ++_i##__LINE__)
 
 
 #define RING_CHRDEV_NAME "ring"
@@ -81,35 +94,62 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     pr_debug("ring_read at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
     FASSERT(ring.read_pos < ring_capacity, -EIO);
 
-    size_t toread = min(length, ring.size);
-    if (!toread) {
+    if (length <= 0) {
+        // Nothing to be done
         RETURN(0);
     }
 
-    if (ring.read_pos + toread > ring_capacity) {
-        /*
-         * Wrapping around the buffer. Stop at the end of it,
-         * let the userspace call `read` again.
-         */
-        toread = ring_capacity - ring.read_pos;
-        FASSERT(toread > 0, -EIO);
+    int interrupted = 0;
+
+    // No content to read yet => block.
+    While (ring.size <= 0) {
+        pr_debug("ring_read: pausing on `ring.size > 0`\n");
+        spin_unlock(&ring.lock);  // Let another thread work
+        interrupted = wait_event_interruptible(ring.wq, ring.size > 0);
+        pr_debug("ring_read: woke up on `ring.size > 0`. interrupted=%d\n", interrupted);
+        spin_lock(&ring.lock);
+
+        if (interrupted) {
+            // `wait_event_interruptible` was interrupted, returning `-ERESTARTSYS`.
+            // The return value is decided outside, depending on whether there was
+            // anything read already.
+            break;
+        } else if (ring.size <= 0) {
+            // Spurious wake-up
+            continue;
+        }
     }
 
-    size_t read = toread - copy_to_user(buf, &ring.buf[ring.read_pos], toread);
-    if (!read) {
-        RETURN(-EFAULT)
+    size_t to_read_now = min(length, ring.size);
+    if (ring.read_pos + to_read_now > ring_capacity) {
+        // Crossing the buffer boundary. Because we are lazy, cut it here and let
+        // the userspace repeat the `read` call.
+        to_read_now = ring_capacity - ring.read_pos;
+        FASSERT(to_read_now > 0, -EIO);
     }
 
-    ring.size -= read;
-    ring.read_pos += read;
-    // Wrap around
+    size_t read_now = to_read_now - copy_to_user(buf, &ring.buf[ring.read_pos], to_read_now);
+    // `read_now` may be zero if `buf` is inaccessible   => EBADF
+    ring.size -= read_now;
+    ring.read_pos += read_now;
     if (ring.read_pos == ring_capacity) {
+        // Wrap around
         ring.read_pos = 0;
     }
+    wake_up(&ring.wq);
     FASSERT(ring.read_pos < ring_capacity, -EIO);
 
     pr_debug("ring_read at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
-    RETURN(read);
+
+    if (read_now > 0) {
+        RETURN(read_now);
+    } else if (interrupted) {
+        RETURN(-ERESTARTSYS)
+    } else {
+        // If not interrupted and nothing read, it's a buffer problem
+        // (the 0-read request case was handled in the very beginning)
+        RETURN(-EFAULT);
+    }
 
 out:
     spin_unlock(&ring.lock);
@@ -126,32 +166,56 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     pr_debug("ring_write at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
     FASSERT(ring.size <= ring_capacity, -EIO);
 
-    size_t towrite = min(length, ring_capacity - ring.size);
-    if (!towrite) {
-        RETURN(-ENOSPC);
+    if (!length) {
+        RETURN(0);
     }
 
+    int interrupted = 0;
+
+    // No room to write. Blocking
+    While (ring.size >= ring_capacity) {
+        pr_debug("ring_write: pausing on `ring.size < ring_capacity`\n");
+        spin_unlock(&ring.lock);
+        interrupted = wait_event_interruptible(ring.wq, ring.size < ring_capacity);
+        pr_debug("ring_write: woke up on `ring.size < ring_capacity`. interrupted=%d\n", interrupted);
+        spin_lock(&ring.lock);
+
+        if (interrupted) {
+            // Interrupted with a signal. The return value is decided outside,
+            // depending on whether have already written anything.
+            break;
+        } else if (ring.size >= ring_capacity) {
+            // Spurious wake-up
+            continue;
+        }
+    }
+
+    size_t to_write_now = min(length, ring_capacity - ring.size);
     size_t write_pos = (ring.read_pos + ring.size) % ring_capacity;
-
-    if (write_pos + towrite > ring_capacity) {
-        /*
-         * Wrapping around the buffer. Stop at the end of it,
-         * let the userspace call `write` again.
-         */
-        towrite = ring_capacity - write_pos;
+    if (write_pos + to_write_now > ring_capacity) {
+        // Crossing the buffer boundary. Because we are lazy, cut it here and let
+        // the userspace repeat the `write` call.
+        to_write_now = ring_capacity - write_pos;
+        FASSERT(to_write_now > 0, -EIO);
     }
 
-    size_t wrote = towrite - copy_from_user(&ring.buf[write_pos], buf, towrite);
-    if (!wrote) {
-        RETURN(-EFAULT);
-    }
-
-    ring.size += wrote;
+    size_t wrote_now = to_write_now - copy_from_user(&ring.buf[write_pos], buf, to_write_now);
+    // `wrote_now` may be zero, meaning `buf` is inaccessible   => -EFAULT
+    ring.size += wrote_now;
+    wake_up(&ring.wq);
     FASSERT(ring.size <= ring_capacity, -EIO);
 
     pr_debug("ring_write at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
-    RETURN(wrote);
 
+    if (wrote_now > 0) {
+        RETURN(wrote_now);
+    } else if (interrupted) {
+        RETURN(-ERESTARTSYS);
+    } else {
+        // If not interrupted and never wrote anything, it's a buffer problem
+        // (the 0-write request case was handled in the very beginning).
+        RETURN(-EFAULT);
+    }
 
 out:
     spin_unlock(&ring.lock);
@@ -174,7 +238,7 @@ static int __init ring_init(void) {
     int err = 0;
 
     if (ring_capacity <= 0) {
-        pr_err("ring-chrdev: ring buffer capacity must be positive");
+        pr_err("ring-chrdev: ring buffer capacity must be positive\n");
         err = -EINVAL;
         goto err_validation;
     }

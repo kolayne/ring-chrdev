@@ -101,7 +101,10 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
 
     int interrupted = 0;
 
-    // No content to read yet => block.
+    // If no content to read, either refuse or block.
+    if (ring.size <= 0 && (filp->f_flags & O_NONBLOCK)) {
+        RETURN(-EWOULDBLOCK);
+    }
     While (ring.size <= 0) {
         pr_debug("ring_read: pausing on `ring.size > 0`\n");
         spin_unlock(&ring.lock);  // Let another thread work
@@ -172,7 +175,10 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
 
     int interrupted = 0;
 
-    // No room to write. Blocking
+    // If no room to write, either refuse or block.
+    if (ring.size >= ring_capacity && (filp->f_flags & O_NONBLOCK)) {
+        RETURN(-EWOULDBLOCK);
+    }
     While (ring.size >= ring_capacity) {
         pr_debug("ring_write: pausing on `ring.size < ring_capacity`\n");
         spin_unlock(&ring.lock);

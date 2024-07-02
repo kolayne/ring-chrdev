@@ -18,7 +18,9 @@ function main() {
 
   cd "$(dirname "$0")"
 
-  source ./test_*.sh || exit $?
+  for test_file in ./test_*.sh; do
+    source "$test_file" || exit $?
+  done
 
   TEST_FUNCS=$(compgen -A function | grep '^test_')
 

@@ -123,9 +123,13 @@ static const struct file_operations chardev_fops = {
 
 
 static int __init ring_init(void) {
+    int err = 0;
+
+
     if (ring_capacity <= 0) {
         pr_err("ring-chrdev: ring buffer capacity must be positive");
-        return E_INVALID_CAPACITY;
+        err = -EINVAL;
+        goto err_validation;
     }
 
     if (ring_capacity > PAGE_SIZE) {
@@ -133,23 +137,35 @@ static int __init ring_init(void) {
                 ring_capacity, PAGE_SIZE);
     }
 
-    // FIXME: allocating kernel memory without zeroing it out and letting
-    // user read it is a security threat.
-    ring_buf = kmalloc(ring_capacity, GFP_KERNEL);
-    if (!ring_buf) {
+    // User cannot read from `ring.buf` before writing into it, so it's ok
+    // to allocate memory without zeroing it out.
+    ring.buf = kmalloc(ring_capacity, GFP_KERNEL);
+    if (!ring.buf) {
         pr_err("ring-chrdev: memory allocation failed\n");
-        return E_NOMEM;
+        err = -ENOMEM;
+        goto err_kmalloc;
     }
 
     major = register_chrdev(0, RING_CHRDEV_NAME, &chardev_fops);
     if (major < 0) {
         pr_err("ring-chrdev: failed to `register_chrdev`: %d\n", major);
-        return E_REGISTRATION_FAILED;
+        err = major;
+        goto err_register_chrdev;
     }
 
     pr_info("ring-chrdev: registered with major=%d\n", major);
 
     return 0;
+
+
+    // For failed init, undo stuff:
+
+    unregister_chrdev(major, RING_CHRDEV_NAME);
+err_register_chrdev:
+    kfree(ring.buf);
+err_kmalloc:
+err_validation:
+    return err;
 }
 
 static void __exit ring_cleanup(void) {

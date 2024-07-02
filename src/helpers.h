@@ -1,12 +1,3 @@
-// Initialization errors
-enum {
-  E_OK = 0,
-  E_REGISTRATION_FAILED,
-  E_NOMEM,
-  E_INVALID_CAPACITY,
-};
-
-
 #ifdef DEBUG
 
 #define FASSERT(cond, retval)  do {                      \

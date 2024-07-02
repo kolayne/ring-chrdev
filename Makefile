@@ -21,4 +21,6 @@ clean:
 
 .PHONY: test
 test: all
+	rmmod ring-chrdev.ko || true
+	insmod ring-chrdev.ko
 	test/run_tests.sh

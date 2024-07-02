@@ -2,7 +2,14 @@
 #include <linux/printk.h>
 #include <linux/fs.h>
 
-#include "helpers.h"
+
+#ifndef DEBUG
+
+// Disable `pr_debug` when not DEBUG
+#undef pr_debug
+#define pr_debug(...) do {} while (0)
+
+#endif  // DEBUG
 
 
 #define RING_CHRDEV_NAME "ring"
@@ -12,7 +19,10 @@ static int major;
 size_t ring_capacity = 10;
 
 struct ring {
-    // TODO: synchronization
+    // Lock protecting all of the ring fields
+    spinlock_t lock;
+    // Wait queue for synchronization between reads and writes.
+    wait_queue_head_t wq;
 
     /// Buffer with the ring content
     char *buf;
@@ -38,16 +48,42 @@ static int ring_release(struct inode *inode, struct file *filp) {
     return 0;
 }
 
+
+#define RETURN(val) {  \
+    ret = (val);       \
+    goto out;          \
+}
+
+#ifdef DEBUG
+
+#define FASSERT(cond, retval)  do {                      \
+    if (!(cond)) {                                       \
+            pr_err("Assertion failed: %s at %s:%d\n",    \
+                   #cond, __FILE__, __LINE__);           \
+            RETURN(retval);                              \
+    }                                                    \
+} while (0);
+
+#else  // DEBUG
+
+#define FASSERT(cond, retval) do {} while(0)
+
+#endif  // DEBUG
+
+
 static ssize_t ring_read(struct file *filp, char __user *buf,
                          size_t length, loff_t *offset)
 {
+    ssize_t ret;
+    spin_lock(&ring.lock);
+
     pr_debug("ring_read: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_read at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
     FASSERT(ring.read_pos < ring_capacity, -EIO);
 
     size_t toread = min(length, ring.size);
     if (!toread) {
-        return 0;
+        RETURN(0);
     }
 
     if (ring.read_pos + toread > ring_capacity) {
@@ -61,7 +97,7 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
 
     size_t read = toread - copy_to_user(buf, &ring.buf[ring.read_pos], toread);
     if (!read) {
-        return -EFAULT;
+        RETURN(-EFAULT)
     }
 
     ring.size -= read;
@@ -73,19 +109,26 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     FASSERT(ring.read_pos < ring_capacity, -EIO);
 
     pr_debug("ring_read at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
-    return read;
+    RETURN(read);
+
+out:
+    spin_unlock(&ring.lock);
+    return ret;
 }
 
 static ssize_t ring_write(struct file *filp, const char __user *buf,
                           size_t length, loff_t *offset)
 {
+    ssize_t ret;
+    spin_lock(&ring.lock);
+
     pr_debug("ring_write: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_write at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
     FASSERT(ring.size <= ring_capacity, -EIO);
 
     size_t towrite = min(length, ring_capacity - ring.size);
     if (!towrite) {
-        return -ENOSPC;
+        RETURN(-ENOSPC);
     }
 
     size_t write_pos = (ring.read_pos + ring.size) % ring_capacity;
@@ -100,14 +143,19 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
 
     size_t wrote = towrite - copy_from_user(&ring.buf[write_pos], buf, towrite);
     if (!wrote) {
-        return -EFAULT;
+        RETURN(-EFAULT);
     }
 
     ring.size += wrote;
     FASSERT(ring.size <= ring_capacity, -EIO);
 
     pr_debug("ring_write at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
-    return wrote;
+    RETURN(wrote);
+
+
+out:
+    spin_unlock(&ring.lock);
+    return ret;
 }
 
 
@@ -124,7 +172,6 @@ static const struct file_operations chardev_fops = {
 
 static int __init ring_init(void) {
     int err = 0;
-
 
     if (ring_capacity <= 0) {
         pr_err("ring-chrdev: ring buffer capacity must be positive");
@@ -152,6 +199,10 @@ static int __init ring_init(void) {
         err = major;
         goto err_register_chrdev;
     }
+
+    spin_lock_init(&ring.lock);
+    // TODO: use `wq` to implement blocking I/O
+    init_waitqueue_head(&ring.wq);
 
     pr_info("ring-chrdev: registered with major=%d\n", major);
 

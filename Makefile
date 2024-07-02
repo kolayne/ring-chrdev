@@ -20,7 +20,9 @@ clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
 
 .PHONY: test
-test: all
-	rmmod ring-chrdev.ko || true
-	insmod ring-chrdev.ko
+test: src/ring-chrdev.ko
+	# Using sudo rather than requiring `sudo make test` such that test
+	# functions can be `kill`ed by the user running the test.
+	sudo rmmod src/ring-chrdev.ko || true
+	sudo insmod src/ring-chrdev.ko
 	test/run_tests.sh

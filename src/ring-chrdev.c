@@ -8,12 +8,22 @@
 #define RING_CHRDEV_NAME "ring"
 static int major;
 
-// TODO: synchronization!
-static char *ring_buf;
-static size_t ring_capacity = 10;
-static size_t ring_size = 0;
-// `ring_pos` points at where to read
-static size_t ring_pos = 0;
+/// Ring buffer size
+size_t ring_capacity = 10;
+
+struct ring {
+    // TODO: synchronization
+
+    /// Buffer with the ring content
+    char *buf;
+    /// Ready-to-read data (bytes)
+    size_t size;
+    /// `buf[read_pos]` is the next character to read
+    size_t read_pos;
+};
+
+// TODO: support multiple rings!
+static struct ring ring;
 
 
 static int ring_open(struct inode *inode, struct file *filp) {
@@ -32,37 +42,37 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
                          size_t length, loff_t *offset)
 {
     pr_debug("ring_read: offset=%lld, len=%ld\n", *offset, length);
-    pr_debug("ring_read at the beginning: ring_size=%ld, ring_pos=%ld\n", ring_size, ring_pos);
-    FASSERT(ring_pos < ring_capacity, -EIO);
+    pr_debug("ring_read at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
+    FASSERT(ring.read_pos < ring_capacity, -EIO);
 
-    size_t toread = min(length, ring_size);
+    size_t toread = min(length, ring.size);
     if (!toread) {
         return 0;
     }
 
-    if (ring_pos + toread > ring_capacity) {
+    if (ring.read_pos + toread > ring_capacity) {
         /*
          * Wrapping around the buffer. Stop at the end of it,
          * let the userspace call `read` again.
          */
-        toread = ring_capacity - ring_pos;
+        toread = ring_capacity - ring.read_pos;
         FASSERT(toread > 0, -EIO);
     }
 
-    size_t read = toread - copy_to_user(buf, &ring_buf[ring_pos], toread);
+    size_t read = toread - copy_to_user(buf, &ring.buf[ring.read_pos], toread);
     if (!read) {
         return -EFAULT;
     }
 
-    ring_size -= read;
-    ring_pos += read;
+    ring.size -= read;
+    ring.read_pos += read;
     // Wrap around
-    if (ring_pos == ring_capacity) {
-        ring_pos = 0;
+    if (ring.read_pos == ring_capacity) {
+        ring.read_pos = 0;
     }
-    FASSERT(ring_pos < ring_capacity, -EIO);
+    FASSERT(ring.read_pos < ring_capacity, -EIO);
 
-    pr_debug("ring_read at the end: ring_size=%ld, ring_pos=%ld\n", ring_size, ring_pos);
+    pr_debug("ring_read at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
     return read;
 }
 
@@ -70,15 +80,15 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
                           size_t length, loff_t *offset)
 {
     pr_debug("ring_write: offset=%lld, len=%ld\n", *offset, length);
-    pr_debug("ring_write at the beginning: ring_size=%ld, ring_pos=%ld\n", ring_size, ring_pos);
-    FASSERT(ring_size <= ring_capacity, -EIO);
+    pr_debug("ring_write at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
+    FASSERT(ring.size <= ring_capacity, -EIO);
 
-    size_t towrite = min(length, ring_capacity - ring_size);
+    size_t towrite = min(length, ring_capacity - ring.size);
     if (!towrite) {
         return -ENOSPC;
     }
 
-    size_t write_pos = (ring_pos + ring_size) % ring_capacity;
+    size_t write_pos = (ring.read_pos + ring.size) % ring_capacity;
 
     if (write_pos + towrite > ring_capacity) {
         /*
@@ -88,15 +98,15 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
         towrite = ring_capacity - write_pos;
     }
 
-    size_t wrote = towrite - copy_from_user(&ring_buf[write_pos], buf, towrite);
+    size_t wrote = towrite - copy_from_user(&ring.buf[write_pos], buf, towrite);
     if (!wrote) {
         return -EFAULT;
     }
 
-    ring_size += wrote;
-    FASSERT(ring_size <= ring_capacity, -EIO);
+    ring.size += wrote;
+    FASSERT(ring.size <= ring_capacity, -EIO);
 
-    pr_debug("ring_write at the end: ring_size=%ld, ring_pos=%ld\n", ring_size, ring_pos);
+    pr_debug("ring_write at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
     return wrote;
 }
 
@@ -147,7 +157,7 @@ static void __exit ring_cleanup(void) {
 
     unregister_chrdev(major, RING_CHRDEV_NAME);
 
-    kfree(ring_buf);
+    kfree(ring.buf);
 }
 
 module_init(ring_init);

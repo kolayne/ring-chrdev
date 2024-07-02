@@ -20,6 +20,8 @@ enum {
 
 #else  // DEBUG
 
+#define FASSERT(cond, retval) do {} while(0)
+
 // Disable `pr_debug` when not DEBUG
 #undef pr_debug
 #define pr_debug(...) do {} while(0)

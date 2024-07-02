@@ -94,7 +94,7 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     }
 
     ring_size += wrote;
-    FASSERT(ring_size < ring_capacity, -EIO);
+    FASSERT(ring_size <= ring_capacity, -EIO);
 
     pr_debug("ring_write at the end: ring_size=%ld, ring_pos=%ld\n", ring_size, ring_pos);
     return wrote;

@@ -1,4 +1,4 @@
-obj-m += ring-chrdev.o
+obj-m += src/ring-chrdev.o
 
 ccflags-y := -Wall -Werror
 
@@ -9,8 +9,16 @@ ifeq ($(DEBUG), 1)
 	ccflags-y += -DDEBUG
 endif
 
-all:
+src/ring-chrdev.ko: src/ring-chrdev.c
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
 
+.PHONY: all
+all: src/ring-chrdev.ko
+
+.PHONY: clean
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
+
+.PHONY: test
+test: all
+	test/run_tests.sh

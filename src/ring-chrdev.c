@@ -90,6 +90,9 @@ static int ring_release(struct inode *inode, struct file *filp) {
 static ssize_t ring_read(struct file *filp, char __user *buf,
                          size_t length, loff_t *offset)
 {
+    pr_info("Read issued by %d (%s), user %d\n",
+            current->tgid, current->comm, current_uid().val);
+
     ssize_t ret;
     // TODO: lock interruptible
     mutex_lock(&ring.lock);
@@ -155,6 +158,7 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     pr_debug("ring_read at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
 
     if (total_read > 0) {
+        inode_set_atime_to_ts(filp->f_inode, current_time(filp->f_inode));
         RETURN(total_read);
     } else if (interrupted) {
         RETURN(-ERESTARTSYS)
@@ -172,6 +176,9 @@ out:
 static ssize_t ring_write(struct file *filp, const char __user *buf,
                           size_t length, loff_t *offset)
 {
+    pr_info("Write issued by %d (%s), user %d\n",
+            current->tgid, current->comm, current_uid().val);
+
     ssize_t ret;
     // TODO: lock interruptible!
     mutex_lock(&ring.lock);
@@ -235,6 +242,7 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     pr_debug("ring_write at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
 
     if (total_written > 0) {
+        inode_set_mtime_to_ts(filp->f_inode, current_time(filp->f_inode));
         RETURN(total_written);
     } else if (interrupted) {
         RETURN(-ERESTARTSYS);

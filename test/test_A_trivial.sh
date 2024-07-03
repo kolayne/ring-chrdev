@@ -15,7 +15,7 @@ test_wr_wrr() {
   echo -n abc > /dev/ring
   [ "$(dd if=/dev/ring bs=1 count=1)" = a ]
   echo -n def > /dev/ring
-  [ "$(dd if=/dev/ring iflag=fullblock bs=3 count=1)" = bcd ]
+  [ "$(dd if=/dev/ring bs=3 count=1)" = bcd ]
   [ "$(timeout -k0 .1 dd if=/dev/ring bs=1 count=3 || true)" = ef ]
 }
 

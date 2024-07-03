@@ -1,6 +1,6 @@
 #!/bin/sh
 
-function test_reader_sequential_writers() {
+function test_CA_reader_sequential_writers() {
   (
     echo -n 0 | dd if=/dev/stdin of=/dev/ring oflag=nonblock
     echo -n 1 > /dev/ring
@@ -15,12 +15,23 @@ function test_reader_sequential_writers() {
   wait %1
 }
 
-function test_reader_parallel_writers() {
-  for((i=0;i<100;++i)); do
-    (sleep 0.1 && echo 1 >/dev/ring) &
+function test_CB_reader_parallel_writers() {
+  for((i=0;i<220;++i)); do
+    # Using `$i % 11` to get lines of different lengths
+    (sleep 0.1 && echo $(($i % 11)) >/dev/ring) &
   done
 
   output=$(! timeout -k0 .5 cat /dev/ring)
-  ! echo "$output" | grep -v '^1$'
-  [ "$(echo "$output" | wc -c)" = 200 ]
+  [ "$(echo "$output" | grep '^0$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^1$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^2$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^3$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^4$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^5$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^6$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^7$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^8$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^9$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | grep '^10$' | wc -l | tee /dev/stderr )" = 20 ]
+  [ "$(echo "$output" | wc -l | tee /dev/stderr)" = 220 ]
 }

@@ -126,34 +126,34 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
         }
     }
 
-    size_t to_read_now = min(length, ring.size);
-    if (ring.read_pos + to_read_now > ring_capacity) {
-        // Crossing the buffer boundary. Because we are lazy, cut it here and let
-        // the userspace repeat the `read` call.
-        to_read_now = ring_capacity - ring.read_pos;
-        FASSERT(to_read_now > 0, -EIO);
-    }
-
 #ifdef DEBUG
     // 'err' rather than 'debug' for nicer output
     pr_err("buffer contents before read: %*pE\n", (int)ring_capacity, ring.buf);
 #endif
 
-    size_t read_now = to_read_now - copy_to_user(buf, &ring.buf[ring.read_pos], to_read_now);
-    // `read_now` may be zero if `buf` is inaccessible   => EBADF
-    ring.size -= read_now;
-    ring.read_pos += read_now;
-    if (ring.read_pos == ring_capacity) {
-        // Wrap around
-        ring.read_pos = 0;
+    // Don't read more than there's in the buffer
+    length = min(length, ring.size);
+    size_t total_read = 0;
+    for (int i = 0; i < 2; ++i) {
+        // As the read may cross the buffer boundary, perform two copies: at the buffer tail
+        // and (maybe) at the buffer head.
+        // If there's no crossing or the first iteration fails, the second one is a no-op.
+        size_t to_read = min(length, ring_capacity - ring.read_pos);
+        size_t read = to_read - copy_to_user(buf, &ring.buf[ring.read_pos], to_read);
+        total_read += read;
+        ring.read_pos = (ring.read_pos + read) % ring_capacity;
+        ring.size -= read;
+        buf += read;
+        length -= read;
     }
+
     wake_up(&ring.wq);
     FASSERT(ring.read_pos < ring_capacity, -EIO);
 
     pr_debug("ring_read at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
 
-    if (read_now > 0) {
-        RETURN(read_now);
+    if (total_read > 0) {
+        RETURN(total_read);
     } else if (interrupted) {
         RETURN(-ERESTARTSYS)
     } else {
@@ -206,31 +206,34 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
         }
     }
 
-    size_t to_write_now = min(length, ring_capacity - ring.size);
-    size_t write_pos = (ring.read_pos + ring.size) % ring_capacity;
-    if (write_pos + to_write_now > ring_capacity) {
-        // Crossing the buffer boundary. Because we are lazy, cut it here and let
-        // the userspace repeat the `write` call.
-        to_write_now = ring_capacity - write_pos;
-        FASSERT(to_write_now > 0, -EIO);
+    // Don't attempt to write more than there's room in the buffer
+    length = min(length, ring_capacity - ring.size);
+    size_t total_written = 0;
+    for (int i = 0; i < 2; ++i) {
+        // As the read may cross the buffer boundary, perform two copies: at the buffer tail
+        // and (maybe) at the buffer head.
+        // If there's no crossing or the first iteration fails, the second one is a no-op.
+        size_t write_pos = (ring.read_pos + ring.size) % ring_capacity;
+        size_t to_write = min(length, ring_capacity - write_pos);
+        size_t wrote = to_write - copy_from_user(&ring.buf[write_pos], buf, to_write);
+        ring.size += wrote;
+        total_written += wrote;
+        buf += wrote;
+        length -= wrote;
     }
-
-    size_t wrote_now = to_write_now - copy_from_user(&ring.buf[write_pos], buf, to_write_now);
 
 #ifdef DEBUG
     // 'warn' rather than 'debug' for nicer output
     pr_warn("buffer contents after write: %*pE\n", (int)ring_capacity, ring.buf);
 #endif
 
-    // `wrote_now` may be zero, meaning `buf` is inaccessible   => -EFAULT
-    ring.size += wrote_now;
     wake_up(&ring.wq);
     FASSERT(ring.size <= ring_capacity, -EIO);
 
     pr_debug("ring_write at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
 
-    if (wrote_now > 0) {
-        RETURN(wrote_now);
+    if (total_written > 0) {
+        RETURN(total_written);
     } else if (interrupted) {
         RETURN(-ERESTARTSYS);
     } else {

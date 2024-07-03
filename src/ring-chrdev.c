@@ -19,13 +19,6 @@
 #endif  // DEBUG
 
 
-// Force upper boundary on the number of iterations of a `while` loop
-// (just like in NASA :sunglasses:).
-// Watch out: the number of iterations for DEBUG is really small.
-#define While(cond) \
-    for (int _i##__LINE__ = 0; (cond) && _i##__LINE__ < MAX_WHILE_ITERATIONS; ++_i##__LINE__)
-
-
 #define RING_CHRDEV_NAME "ring"
 static int major;
 
@@ -115,7 +108,7 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     if (ring.size <= 0 && (filp->f_flags & O_NONBLOCK)) {
         CLEANRET(-EWOULDBLOCK);
     }
-    While (ring.size <= 0) {
+    while (ring.size <= 0) {
         pr_debug("ring_read: pausing on `ring.size > 0`\n");
         mutex_unlock(&ring.lock);  // Let another thread work
         interrupted = wait_event_interruptible(ring.wq, ring.size > 0);
@@ -128,7 +121,7 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
             // `wait_event_interruptible` was interrupted, returning `-ERESTARTSYS`.
             // The return value is decided outside, depending on whether there was
             // anything read already.
-            break;
+            CLEANRET(interrupted);
         } else if (ring.size <= 0) {
             // Spurious wake-up
             continue;
@@ -142,12 +135,14 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
 
     // Don't read more than there's in the buffer
     length = min(length, ring.size);
+    ASSERTORCLEANRET(length > 0, -EIO);
     size_t total_read = 0;
     for (int i = 0; i < 2; ++i) {
         // As the read may cross the buffer boundary, perform two copies: at the buffer tail
         // and (maybe) at the buffer head.
         // If there's no crossing or the first iteration fails, the second one is a no-op.
         size_t to_read = min(length, ring_capacity - ring.read_pos);
+        ASSERTORCLEANRET((i != 0) || to_read > 0, -EIO);
         size_t read = to_read - copy_to_user(buf, &ring.buf[ring.read_pos], to_read);
         total_read += read;
         ring.read_pos = (ring.read_pos + read) % ring_capacity;
@@ -205,7 +200,7 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     if (ring.size >= ring_capacity && (filp->f_flags & O_NONBLOCK)) {
         CLEANRET(-EWOULDBLOCK);
     }
-    While (ring.size >= ring_capacity) {
+    while (ring.size >= ring_capacity) {
         pr_debug("ring_write: pausing on `ring.size < ring_capacity`\n");
         mutex_unlock(&ring.lock);
         interrupted = wait_event_interruptible(ring.wq, ring.size < ring_capacity);
@@ -217,7 +212,7 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
         if (interrupted) {
             // Interrupted with a signal. The return value is decided outside,
             // depending on whether have already written anything.
-            break;
+           CLEANRET(interrupted);
         } else if (ring.size >= ring_capacity) {
             // Spurious wake-up
             continue;
@@ -226,6 +221,7 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
 
     // Don't attempt to write more than there's room in the buffer
     length = min(length, ring_capacity - ring.size);
+    ASSERTORCLEANRET(length > 0, -EIO);
     size_t total_written = 0;
     for (int i = 0; i < 2; ++i) {
         // As the read may cross the buffer boundary, perform two copies: at the buffer tail
@@ -233,6 +229,7 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
         // If there's no crossing or the first iteration fails, the second one is a no-op.
         size_t write_pos = (ring.read_pos + ring.size) % ring_capacity;
         size_t to_write = min(length, ring_capacity - write_pos);
+        ASSERTORCLEANRET((i != 0) || to_write > 0, -EIO);
         size_t wrote = to_write - copy_from_user(&ring.buf[write_pos], buf, to_write);
         ring.size += wrote;
         total_written += wrote;

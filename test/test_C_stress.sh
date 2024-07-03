@@ -16,22 +16,24 @@ function test_CA_reader_sequential_writers() {
 }
 
 function test_CB_reader_parallel_writers() {
-  for((i=0;i<220;++i)); do
-    # Using `$i % 11` to get lines of different lengths
-    (sleep 0.1 && echo $(($i % 11)) >/dev/ring) &
+  # Kind is set to 10 such that the length of each print (including the newline)
+  # is of the same length that is a multiple of the ring buffer size (assuming 10).
+  #
+  # If that's not the case, the `write` system call may complete partially, leading
+  # to the userspace repeating the call. So, eventually all the data will get there
+  # but, if the ring is under high load, the content may be broken apart by other
+  # writes.
+  KIND=10
+  COUNT=200
+  TOTAL=$(("$KIND" * "$COUNT"))
+
+  for((i=0;i<"$TOTAL";++i)); do
+    (echo $(($i % $KIND)) >/dev/ring) &
   done
 
-  output=$(! timeout -k0 .5 cat /dev/ring)
-  [ "$(echo "$output" | grep '^0$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^1$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^2$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^3$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^4$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^5$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^6$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^7$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^8$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^9$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | grep '^10$' | wc -l | tee /dev/stderr )" = 20 ]
-  [ "$(echo "$output" | wc -l | tee /dev/stderr)" = 220 ]
+  output=$(timeout -k0 1 cat /dev/ring || true)
+  for((i=0;i<"$KIND";++i)); do
+    [ "$(echo "$output" | grep "^$i\$" | wc -l | tee /dev/stderr )" = "$COUNT" ]
+  done
+  [ "$(echo "$output" | wc -l | tee /dev/stderr)" = "$TOTAL" ]
 }

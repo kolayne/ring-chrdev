@@ -93,9 +93,12 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     pr_info("Read issued by %d (%s), user %d\n",
             current->tgid, current->comm, current_uid().val);
 
+    int mutex_intr = 0;
     ssize_t ret;
-    // TODO: lock interruptible
-    mutex_lock(&ring.lock);
+
+    mutex_intr = mutex_lock_interruptible(&ring.lock);
+    if (mutex_intr)
+        CLEANRET(mutex_intr);
 
     pr_debug("ring_read: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_read at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
@@ -116,9 +119,10 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
         pr_debug("ring_read: pausing on `ring.size > 0`\n");
         mutex_unlock(&ring.lock);  // Let another thread work
         interrupted = wait_event_interruptible(ring.wq, ring.size > 0);
-        // TODO: lock interruptible!
-        mutex_lock(&ring.lock);
         pr_debug("ring_read: woke up on `ring.size > 0`. interrupted=%d\n", interrupted);
+        mutex_intr = mutex_lock_interruptible(&ring.lock);
+        if (mutex_intr)
+            CLEANRET(mutex_intr);
 
         if (interrupted) {
             // `wait_event_interruptible` was interrupted, returning `-ERESTARTSYS`.
@@ -169,7 +173,8 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     }
 
 clean_ret:
-    mutex_unlock(&ring.lock);
+    if (!mutex_intr)
+        mutex_unlock(&ring.lock);
     return ret;
 }
 
@@ -179,9 +184,12 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     pr_info("Write issued by %d (%s), user %d\n",
             current->tgid, current->comm, current_uid().val);
 
+    int mutex_intr = 0;
     ssize_t ret;
-    // TODO: lock interruptible!
-    mutex_lock(&ring.lock);
+
+    mutex_intr = mutex_lock_interruptible(&ring.lock);
+    if (mutex_intr)
+        CLEANRET(mutex_intr);
 
     pr_debug("ring_write: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_write at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
@@ -201,9 +209,10 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
         pr_debug("ring_write: pausing on `ring.size < ring_capacity`\n");
         mutex_unlock(&ring.lock);
         interrupted = wait_event_interruptible(ring.wq, ring.size < ring_capacity);
-        // TODO: lock interruptible
-        mutex_lock(&ring.lock);
         pr_debug("ring_write: woke up on `ring.size < ring_capacity`. interrupted=%d\n", interrupted);
+        mutex_intr = mutex_lock_interruptible(&ring.lock);
+        if (mutex_intr)
+            CLEANRET(mutex_intr);
 
         if (interrupted) {
             // Interrupted with a signal. The return value is decided outside,
@@ -253,7 +262,8 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     }
 
 clean_ret:
-    mutex_unlock(&ring.lock);
+    if (!mutex_intr)
+        mutex_unlock(&ring.lock);
     return ret;
 }
 

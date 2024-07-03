@@ -65,24 +65,24 @@ static int ring_release(struct inode *inode, struct file *filp) {
 }
 
 
-#define RETURN(val) {  \
-    ret = (val);       \
-    goto out;          \
-}
+#define CLEANRET(val) do {  \
+    ret = (val);            \
+    goto clean_ret;         \
+} while (0)
 
 #ifdef DEBUG
 
-#define FASSERT(cond, retval)  do {                      \
-    if (!(cond)) {                                       \
-            pr_err("Assertion failed: %s at %s:%d\n",    \
-                   #cond, __FILE__, __LINE__);           \
-            RETURN(retval);                              \
-    }                                                    \
+#define ASSERTORCLEANRET(cond, retval)  do {           \
+    if (!(cond)) {                                     \
+            pr_err("Assertion failed: %s at %s:%d\n",  \
+                   #cond, __FILE__, __LINE__);         \
+            CLEANRET(retval);                          \
+    }                                                  \
 } while (0);
 
 #else  // DEBUG
 
-#define FASSERT(cond, retval) do {} while(0)
+#define ASSERTORCLEANRET(cond, retval) do {} while(0)
 
 #endif  // DEBUG
 
@@ -99,18 +99,18 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
 
     pr_debug("ring_read: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_read at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
-    FASSERT(ring.read_pos < ring_capacity, -EIO);
+    ASSERTORCLEANRET(ring.read_pos < ring_capacity, -EIO);
 
     if (length <= 0) {
         // Nothing to be done
-        RETURN(0);
+        CLEANRET(0);
     }
 
     int interrupted = 0;
 
     // If no content to read, either refuse or block.
     if (ring.size <= 0 && (filp->f_flags & O_NONBLOCK)) {
-        RETURN(-EWOULDBLOCK);
+        CLEANRET(-EWOULDBLOCK);
     }
     While (ring.size <= 0) {
         pr_debug("ring_read: pausing on `ring.size > 0`\n");
@@ -153,22 +153,22 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     }
 
     wake_up(&ring.wq);
-    FASSERT(ring.read_pos < ring_capacity, -EIO);
+    ASSERTORCLEANRET(ring.read_pos < ring_capacity, -EIO);
 
     pr_debug("ring_read at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
 
     if (total_read > 0) {
         inode_set_atime_to_ts(filp->f_inode, current_time(filp->f_inode));
-        RETURN(total_read);
+        CLEANRET(total_read);
     } else if (interrupted) {
-        RETURN(-ERESTARTSYS)
+        CLEANRET(-ERESTARTSYS);
     } else {
         // If not interrupted and nothing read, it's a buffer problem
         // (the 0-read request case was handled in the very beginning)
-        RETURN(-EFAULT);
+        CLEANRET(-EFAULT);
     }
 
-out:
+clean_ret:
     mutex_unlock(&ring.lock);
     return ret;
 }
@@ -185,17 +185,17 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
 
     pr_debug("ring_write: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_write at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
-    FASSERT(ring.size <= ring_capacity, -EIO);
+    ASSERTORCLEANRET(ring.size <= ring_capacity, -EIO);
 
     if (!length) {
-        RETURN(0);
+        CLEANRET(0);
     }
 
     int interrupted = 0;
 
     // If no room to write, either refuse or block.
     if (ring.size >= ring_capacity && (filp->f_flags & O_NONBLOCK)) {
-        RETURN(-EWOULDBLOCK);
+        CLEANRET(-EWOULDBLOCK);
     }
     While (ring.size >= ring_capacity) {
         pr_debug("ring_write: pausing on `ring.size < ring_capacity`\n");
@@ -237,22 +237,22 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
 #endif
 
     wake_up(&ring.wq);
-    FASSERT(ring.size <= ring_capacity, -EIO);
+    ASSERTORCLEANRET(ring.size <= ring_capacity, -EIO);
 
     pr_debug("ring_write at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
 
     if (total_written > 0) {
         inode_set_mtime_to_ts(filp->f_inode, current_time(filp->f_inode));
-        RETURN(total_written);
+        CLEANRET(total_written);
     } else if (interrupted) {
-        RETURN(-ERESTARTSYS);
+        CLEANRET(-ERESTARTSYS);
     } else {
         // If not interrupted and never wrote anything, it's a buffer problem
         // (the 0-write request case was handled in the very beginning).
-        RETURN(-EFAULT);
+        CLEANRET(-EFAULT);
     }
 
-out:
+clean_ret:
     mutex_unlock(&ring.lock);
     return ret;
 }
@@ -300,7 +300,6 @@ static int __init ring_init(void) {
     }
 
     mutex_init(&ring.lock);
-    // TODO: use `wq` to implement blocking I/O
     init_waitqueue_head(&ring.wq);
 
     pr_info("ring-chrdev: registered with major=%d\n", major);

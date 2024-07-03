@@ -31,6 +31,8 @@ static int major;
 
 /// Ring buffer size
 size_t ring_capacity = 10;
+module_param(ring_capacity, ulong, 0);
+MODULE_PARM_DESC(ring_capacity, "Max buffer size of the ring");
 
 struct ring {
     // Lock protecting all of the ring fields

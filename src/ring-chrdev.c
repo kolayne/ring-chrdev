@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/printk.h>
 #include <linux/fs.h>
+#include <linux/mutex.h>
 
 
 #ifdef DEBUG
@@ -33,7 +34,7 @@ size_t ring_capacity = 10;
 
 struct ring {
     // Lock protecting all of the ring fields
-    spinlock_t lock;
+    struct mutex lock;
     // Wait queue for synchronization between reads and writes.
     wait_queue_head_t wq;
 
@@ -88,7 +89,8 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
                          size_t length, loff_t *offset)
 {
     ssize_t ret;
-    spin_lock(&ring.lock);
+    // TODO: lock interruptible
+    mutex_lock(&ring.lock);
 
     pr_debug("ring_read: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_read at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
@@ -107,10 +109,11 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     }
     While (ring.size <= 0) {
         pr_debug("ring_read: pausing on `ring.size > 0`\n");
-        spin_unlock(&ring.lock);  // Let another thread work
+        mutex_unlock(&ring.lock);  // Let another thread work
         interrupted = wait_event_interruptible(ring.wq, ring.size > 0);
+        // TODO: lock interruptible!
+        mutex_lock(&ring.lock);
         pr_debug("ring_read: woke up on `ring.size > 0`. interrupted=%d\n", interrupted);
-        spin_lock(&ring.lock);
 
         if (interrupted) {
             // `wait_event_interruptible` was interrupted, returning `-ERESTARTSYS`.
@@ -130,6 +133,11 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
         to_read_now = ring_capacity - ring.read_pos;
         FASSERT(to_read_now > 0, -EIO);
     }
+
+#ifdef DEBUG
+    // 'err' rather than 'debug' for nicer output
+    pr_err("buffer contents before read: %*pE\n", (int)ring_capacity, ring.buf);
+#endif
 
     size_t read_now = to_read_now - copy_to_user(buf, &ring.buf[ring.read_pos], to_read_now);
     // `read_now` may be zero if `buf` is inaccessible   => EBADF
@@ -155,7 +163,7 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     }
 
 out:
-    spin_unlock(&ring.lock);
+    mutex_unlock(&ring.lock);
     return ret;
 }
 
@@ -163,7 +171,8 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
                           size_t length, loff_t *offset)
 {
     ssize_t ret;
-    spin_lock(&ring.lock);
+    // TODO: lock interruptible!
+    mutex_lock(&ring.lock);
 
     pr_debug("ring_write: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_write at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
@@ -181,10 +190,11 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     }
     While (ring.size >= ring_capacity) {
         pr_debug("ring_write: pausing on `ring.size < ring_capacity`\n");
-        spin_unlock(&ring.lock);
+        mutex_unlock(&ring.lock);
         interrupted = wait_event_interruptible(ring.wq, ring.size < ring_capacity);
+        // TODO: lock interruptible
+        mutex_lock(&ring.lock);
         pr_debug("ring_write: woke up on `ring.size < ring_capacity`. interrupted=%d\n", interrupted);
-        spin_lock(&ring.lock);
 
         if (interrupted) {
             // Interrupted with a signal. The return value is decided outside,
@@ -206,6 +216,12 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     }
 
     size_t wrote_now = to_write_now - copy_from_user(&ring.buf[write_pos], buf, to_write_now);
+
+#ifdef DEBUG
+    // 'warn' rather than 'debug' for nicer output
+    pr_warn("buffer contents after write: %*pE\n", (int)ring_capacity, ring.buf);
+#endif
+
     // `wrote_now` may be zero, meaning `buf` is inaccessible   => -EFAULT
     ring.size += wrote_now;
     wake_up(&ring.wq);
@@ -224,7 +240,7 @@ static ssize_t ring_write(struct file *filp, const char __user *buf,
     }
 
 out:
-    spin_unlock(&ring.lock);
+    mutex_unlock(&ring.lock);
     return ret;
 }
 
@@ -270,7 +286,7 @@ static int __init ring_init(void) {
         goto err_register_chrdev;
     }
 
-    spin_lock_init(&ring.lock);
+    mutex_init(&ring.lock);
     // TODO: use `wq` to implement blocking I/O
     init_waitqueue_head(&ring.wq);
 

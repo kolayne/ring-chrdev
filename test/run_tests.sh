@@ -18,27 +18,28 @@ function main() {
 
   cd "$(dirname "$0")"
 
-  for test_file in ./test_*.sh; do
-    source "$test_file" || exit $?
-  done
-
-  TEST_FUNCS=$(compgen -A function | grep '^test_')
-
   failed=0
 
-  for test_func in $TEST_FUNCS; do
-    echo TEST "$CPURPLE$test_func$CNONE":
+  for test_file in ./test_*.sh; do
+    source "$test_file" || exit $?
+    TEST_FUNCS=$(compgen -A function | grep '^test_')
 
-    (set -e; "$test_func")
-    ret=$?
-    if [ "$ret" -eq 0 ]; then
-      echo TEST "$CPURPLE$test_func$CNONE": ${CGREEN}PASSED$CNONE!
-    else
-      echo TEST "$CPURPLE$test_func$CNONE": ${CRED}FAILED$CNONE! "($ret)"
-      failed=1
-    fi
+    for test_func in $TEST_FUNCS; do
+      echo TEST "$CPURPLE$test_func$CNONE":
 
-    echo -ne '\n\n'
+      (set -e; "$test_func")
+      ret=$?
+      if [ "$ret" -eq 0 ]; then
+        echo TEST "$CPURPLE$test_func$CNONE": ${CGREEN}PASSED$CNONE!
+      else
+        echo TEST "$CPURPLE$test_func$CNONE": ${CRED}FAILED$CNONE! "($ret)"
+        failed=1
+      fi
+
+      echo -ne '\n\n'
+    done
+
+    unset -f $(compgen -A function | grep '^test_')
   done
 
   exit "$failed"

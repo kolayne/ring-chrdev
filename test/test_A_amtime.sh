@@ -1,13 +1,13 @@
 function birtht() {
-  stat -c %W /dev/ring
+  stat -c %w /dev/ring
 }
 
 function accesst() {
-  stat -c %X /dev/ring
+  stat -c %x /dev/ring
 }
 
 function modifiedt() {
-  stat -c %Y /dev/ring
+  stat -c %y /dev/ring
 }
 
 function test_am_time() {
@@ -28,9 +28,15 @@ function test_am_time() {
   modified=$(modifiedt)
 
   # If read, access time shall change
-  dd if=/dev/ring bs=2 count=1
+  dd if=/dev/ring bs=1 count=1
   [ "$birth" = "$(birtht)" ]
   [ "$access" != "$(accesst)" ]
   [ "$modified" = "$(modifiedt)" ]
   access=$(accesst)
+
+  # With noatime, shall remain
+  dd if=/dev/ring iflag=noatime bs=1 count=1
+  [ "$birth" = "$(birtht)" ]
+  [ "$access" = "$(accesst)" ]
+  [ "$modified" = "$(modifiedt)" ]
 }

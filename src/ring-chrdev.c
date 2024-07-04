@@ -164,7 +164,8 @@ static ssize_t ring_read(struct file *filp, char __user *buf,
     pr_debug("ring_read at the end: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
 
     if (total_read > 0) {
-        inode_set_atime_to_ts(filp->f_inode, current_time(filp->f_inode));
+        if (!(filp->f_flags & O_NOATIME))
+            inode_set_atime_to_ts(filp->f_inode, current_time(filp->f_inode));
         CLEANRET(total_read);
     } else if (interrupted) {
         CLEANRET(-ERESTARTSYS);

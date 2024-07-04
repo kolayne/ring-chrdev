@@ -11,7 +11,13 @@ export CNONE=$'\033[0m'
 function main() {
   if ! (lsmod | grep '^ring_chrdev ' >/dev/null) || ! [ -c /dev/ring ]; then
     echo Make sure you have loaded the module with '`insmod`' \
-      and created /dev/ring with '`mknod`' >&2
+      and created /dev/ring with '`mknod`' and made the current user its owner >&2
+    exit 1
+  fi
+
+  if ! [ -O /dev/ring ] && [ "$(id -u)" != 0 ]; then
+    echo /dev/ring must be owned by the current user for the noatime test \
+      to complete. Use '`chown`' >&2
     exit 1
   fi
 

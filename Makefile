@@ -9,7 +9,7 @@ ifeq ($(DEBUG), 1)
 	ccflags-y += -DDEBUG
 endif
 
-src/ring-chrdev.ko: src/ring-chrdev.c
+src/ring-chrdev.ko: src/ring-chrdev.c include/ring_ioctl.h
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
 
 .PHONY: all

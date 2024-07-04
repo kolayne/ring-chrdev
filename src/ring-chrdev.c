@@ -3,6 +3,8 @@
 #include <linux/fs.h>
 #include <linux/mutex.h>
 
+#include "../include/ring_ioctl.h"
+
 
 #ifdef DEBUG
 
@@ -39,6 +41,11 @@ struct ring {
     size_t size;
     /// `buf[read_pos]` is the next character to read
     size_t read_pos;
+
+    /// Last writer to the file (0 if never written to)
+    struct last_acc lastw;
+    /// Last reader of the file (0 if never read from)
+    struct last_acc lastr;
 };
 
 // TODO: support multiple rings!
@@ -83,8 +90,8 @@ static int ring_release(struct inode *inode, struct file *filp) {
 static ssize_t ring_read(struct file *filp, char __user *buf,
                          size_t length, loff_t *offset)
 {
-    pr_info("Read issued by %d (%s), user %d\n",
-            current->tgid, current->comm, current_uid().val);
+    ring.lastr.tgid = current->tgid;
+    ring.lastr.uid = current_uid().val;
 
     int mutex_intr = 0;
     ssize_t ret;
@@ -176,8 +183,8 @@ clean_ret:
 static ssize_t ring_write(struct file *filp, const char __user *buf,
                           size_t length, loff_t *offset)
 {
-    pr_info("Write issued by %d (%s), user %d\n",
-            current->tgid, current->comm, current_uid().val);
+    ring.lastw.tgid = current->tgid;
+    ring.lastw.uid = current_uid().val;
 
     int mutex_intr = 0;
     ssize_t ret;
@@ -264,6 +271,41 @@ clean_ret:
     return ret;
 }
 
+static long ring_ioctl(struct file *filp, unsigned cmd, unsigned long arg) {
+    struct last_acc __user *acc = (void __user *)arg;
+    long ret;
+
+    int mutex_intr = mutex_lock_interruptible(&ring.lock);
+    if (mutex_intr)
+        CLEANRET(mutex_intr);
+
+    switch (cmd) {
+    case IR_LAST_WRITER:
+        if (0 != copy_to_user(acc, &ring.lastw, sizeof ring.lastw)) {
+            CLEANRET(-EFAULT);;
+        }
+        break;
+
+    case IR_LAST_READER:
+        if (0 != copy_to_user(acc, &ring.lastr, sizeof ring.lastr)) {
+            CLEANRET(-EFAULT);;
+        }
+        break;
+
+    default:
+        CLEANRET(-EINVAL);
+    }
+
+    // Success
+    CLEANRET(0);
+
+
+clean_ret:
+    if (!mutex_intr)
+        mutex_unlock(&ring.lock);
+    return ret;
+}
+
 
 static const struct file_operations chardev_fops = {
     // Make sure this module isn't unloaded while a file is open.
@@ -273,6 +315,7 @@ static const struct file_operations chardev_fops = {
     .write = ring_write,
     .open = ring_open,
     .release = ring_release,
+    .unlocked_ioctl = ring_ioctl,
 };
 
 

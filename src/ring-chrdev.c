@@ -90,15 +90,15 @@ static int ring_release(struct inode *inode, struct file *filp) {
 static ssize_t ring_read(struct file *filp, char __user *buf,
                          size_t length, loff_t *offset)
 {
-    ring.lastr.tgid = current->tgid;
-    ring.lastr.uid = current_uid().val;
-
     int mutex_intr = 0;
     ssize_t ret;
 
     mutex_intr = mutex_lock_interruptible(&ring.lock);
     if (mutex_intr)
         CLEANRET(mutex_intr);
+
+    ring.lastr.tgid = current->tgid;
+    ring.lastr.uid = current_uid().val;
 
     pr_debug("ring_read: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_read at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
@@ -184,15 +184,15 @@ clean_ret:
 static ssize_t ring_write(struct file *filp, const char __user *buf,
                           size_t length, loff_t *offset)
 {
-    ring.lastw.tgid = current->tgid;
-    ring.lastw.uid = current_uid().val;
-
     int mutex_intr = 0;
     ssize_t ret;
 
     mutex_intr = mutex_lock_interruptible(&ring.lock);
     if (mutex_intr)
         CLEANRET(mutex_intr);
+
+    ring.lastw.tgid = current->tgid;
+    ring.lastw.uid = current_uid().val;
 
     pr_debug("ring_write: offset=%lld, len=%ld\n", *offset, length);
     pr_debug("ring_write at the beginning: ring.size=%ld, ring.read_pos=%ld\n", ring.size, ring.read_pos);
